@@ -16,7 +16,6 @@ console.log('   Diretório atual:', __dirname);
 
 // Verificação de módulos ESSENCIAIS
 
-
 process.on('uncaughtException', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`❌ Porta ${process.env.PORT || 3001} já está em uso!`);
@@ -26,7 +25,6 @@ process.on('uncaughtException', (err) => {
     console.error('💥 Erro não tratado:', err);
   }
 });
-
 
 try {
   require('cors');
@@ -50,7 +48,6 @@ console.log('   PORT:', process.env.PORT);
 console.log('   DATABASE_URL:', process.env.DATABASE_URL);
 
 const express = require("express");
-const cors = require("cors");
 const path = require('path');  
 const http = require("http");
 const { Server } = require("socket.io");
@@ -61,11 +58,33 @@ const frontendPath = process.env.FRONTEND_PATH || path.join(__dirname, '../../fr
 console.log('📁 Servindo frontend de:', frontendPath);
 app.use(express.static(frontendPath));
 
-// Configuração CORS mais permissiva
-app.use(cors({
-  origin: '/*',
-  credentials: true
-}));
+// ============== CONFIGURAÇÃO CORS CORRIGIDA ==============
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5000', 
+    'http://localhost:5001',
+    'http://localhost:5002',
+    'http://localhost:5003',
+    'http://localhost:5004'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
 
 app.use(express.json());
 
@@ -75,13 +94,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// Socket.IO com CORS
+// Socket.IO com CORS corrigido
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: ['http://localhost:3000', 'http://localhost:5000', 'http://localhost:5001'],
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
+
+// ... [RESTANTE DO CÓDIGO PERMANECE IGUAL ATÉ O FINAL] ...
 
 // Dados mock em memória
 let mockUsers = [
@@ -503,8 +525,8 @@ app.get("/", (req, res) => {
     endpoints: {
       health: "/health",
       auth: "/api/auth/:action",      // Usando parâmetro nomeado
-  users: "/api/users/:id?",       // Parâmetro opcional
-  os: "/api/os/:id?"   
+      users: "/api/users/:id?",       // Parâmetro opcional
+      os: "/api/os/:id?"   
     }
   });
 });
@@ -529,7 +551,6 @@ io.on('connection', (socket) => {
   });
 });
 
-
 // ============== INICIAR SERVIDOR ==============
 
 const PORT = parseInt(process.env.PORT) || 5000;
@@ -545,7 +566,6 @@ server.listen(PORT, '127.0.0.1', () => {
 ╚════════════════════════════════════════════════╝
   `);
 });
-
 
 // ============== MIDDLEWARE CATCH-ALL PARA SPA ==============
 // DEVE SER A ÚLTIMA COISA ANTES DE INICIAR O SERVIDOR
