@@ -1,7 +1,7 @@
-// VERIFICAÇÃO DE MÓDULOS PARA PRODUÇÃO
+// BACKEND MODIFICADO PARA REDE LOCAL
+// backend/src/index.js
 
 // ============== CONFIGURAÇÃO DE AMBIENTE ==============
-// CARREGA VARIÁVEIS DE AMBIENTE PARA DESENVOLVIMENTO
 if (process.env.NODE_ENV !== 'production') {
   console.log('🔧 Modo desenvolvimento - carregando .env');
   require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
@@ -14,13 +14,30 @@ console.log('   PORT:', process.env.PORT || '3001 (padrão)');
 console.log('   DATABASE_URL:', process.env.DATABASE_URL || 'Não definido');
 console.log('   Diretório atual:', __dirname);
 
-// Verificação de módulos ESSENCIAIS
+// Função para obter IP local da máquina
+function getLocalIpAddress() {
+  const os = require('os');
+  const interfaces = os.networkInterfaces();
+  
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Pular endereços internos (lo) e não-IPv4
+      if (iface.family === 'IPv4' && !iface.internal) {
+        console.log(`🌐 IP Local detectado: ${iface.address} (interface: ${name})`);
+        return iface.address;
+      }
+    }
+  }
+  
+  return 'localhost';
+}
+
+const LOCAL_IP = getLocalIpAddress();
 
 process.on('uncaughtException', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`❌ Porta ${process.env.PORT || 3001} já está em uso!`);
     console.error('   Tentando outra porta automaticamente...');
-    // Não fazer nada, deixar o main.js reiniciar com nova porta
   } else {
     console.error('💥 Erro não tratado:', err);
   }
@@ -43,9 +60,6 @@ try {
 }
 
 console.log('✅ Todos os módulos necessários foram carregados');
-console.log('   NODE_ENV:', process.env.NODE_ENV);
-console.log('   PORT:', process.env.PORT);
-console.log('   DATABASE_URL:', process.env.DATABASE_URL);
 
 const express = require("express");
 const path = require('path');  
@@ -58,20 +72,21 @@ const frontendPath = process.env.FRONTEND_PATH || path.join(__dirname, '../../fr
 console.log('📁 Servindo frontend de:', frontendPath);
 app.use(express.static(frontendPath));
 
-// ============== CONFIGURAÇÃO CORS CORRIGIDA ==============
+// ============== CONFIGURAÇÃO CORS PARA REDE LOCAL ==============
 app.use((req, res, next) => {
-  const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:5000', 
-    'http://localhost:5001',
-    'http://localhost:5002',
-    'http://localhost:5003',
-    'http://localhost:5004'
-  ];
-  
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  
+  // Permitir localhost e IPs da rede local (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+  const isLocalNetwork = origin && (
+    origin.includes('localhost') ||
+    origin.includes('127.0.0.1') ||
+    /192\.168\.\d+\.\d+/.test(origin) ||
+    /10\.\d+\.\d+\.\d+/.test(origin) ||
+    /172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+/.test(origin)
+  );
+  
+  if (isLocalNetwork || !origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -88,24 +103,43 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Log de todas as requisições
+// Log de todas as requisições com IP
 app.use((req, res, next) => {
-  console.log(`📡 ${req.method} ${req.path}`);
+  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  console.log(`📡 ${req.method} ${req.path} - Cliente: ${clientIp}`);
   next();
 });
 
-// Socket.IO com CORS corrigido
+// Socket.IO com CORS para rede local
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:3000', 'http://localhost:5000', 'http://localhost:5001'],
-    methods: ["GET", "POST"],
+    origin: function (origin, callback) {
+      // Permitir requisições sem origin (Electron, mobile apps, etc)
+      if (!origin) return callback(null, true);
+      
+      // Permitir localhost e rede local
+      const isLocalNetwork = 
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1') ||
+        /192\.168\.\d+\.\d+/.test(origin) ||
+        /10\.\d+\.\d+\.\d+/.test(origin) ||
+        /172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+/.test(origin);
+      
+      if (isLocalNetwork) {
+        callback(null, true);
+      } else {
+        callback(new Error('Não permitido pelo CORS'));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true
   }
 });
 
-// ... [RESTANTE DO CÓDIGO PERMANECE IGUAL ATÉ O FINAL] ...
+// Exportar io para uso nos controllers
+module.exports = { io };
 
-// Dados mock em memória
+// Dados mock em memória (compartilhados entre todas as conexões)
 let mockUsers = [
   {
     id: 1,
@@ -113,7 +147,7 @@ let mockUsers = [
     fullName: "Administrador",
     email: "admin@example.com",
     role: "admin",
-    password: "admin123" // Em produção, isso seria hasheado
+    password: "admin123"
   },
   {
     id: 2,
@@ -140,45 +174,6 @@ let mockOrders = [
     assignedToId: 2,
     createdById: 1,
     comments: []
-  },
-  {
-    id: 2,
-    clientName: "João Santos",
-    clientPhone: "(11) 91234-5678",
-    equipmentName: "Desktop HP",
-    equipmentSerial: "HP987654",
-    defect: "Tela azul",
-    status: "in_progress",
-    priority: "medium",
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    updatedAt: new Date().toISOString(),
-    assignedToId: 2,
-    createdById: 1,
-    comments: [
-      {
-        id: 1,
-        osId: 2,
-        userId: 2,
-        comment: "Iniciando diagnóstico",
-        createdAt: new Date().toISOString()
-      }
-    ]
-  },
-  {
-    id: 3,
-    clientName: "Ana Costa",
-    clientPhone: "(11) 95555-1234",
-    equipmentName: "Impressora Canon",
-    equipmentSerial: "CN456789",
-    defect: "Não imprime",
-    status: "completed",
-    priority: "low",
-    createdAt: new Date(Date.now() - 172800000).toISOString(),
-    updatedAt: new Date(Date.now() - 86400000).toISOString(),
-    completedAt: new Date(Date.now() - 86400000).toISOString(),
-    assignedToId: 2,
-    createdById: 1,
-    comments: []
   }
 ];
 
@@ -190,15 +185,12 @@ function authMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Não autorizado' });
   }
   
-  // Em produção, você validaria o JWT aqui
-  // Por enquanto, vamos apenas verificar se existe token
   req.userId = 1; // Simula usuário logado
   next();
 }
 
 // ============== ROTAS DE AUTENTICAÇÃO ==============
 
-// Login
 app.post("/api/auth/login", (req, res) => {
   const { username, password } = req.body;
   
@@ -212,7 +204,6 @@ app.post("/api/auth/login", (req, res) => {
     });
   }
   
-  // Remove senha do retorno
   const { password: _, ...userWithoutPassword } = user;
   
   res.json({
@@ -222,7 +213,6 @@ app.post("/api/auth/login", (req, res) => {
   });
 });
 
-// Me - Obter usuário atual
 app.get("/api/auth/me", authMiddleware, (req, res) => {
   console.log("👤 Obtendo usuário atual");
   
@@ -241,7 +231,6 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
 
 // ============== ROTAS DE USUÁRIOS ==============
 
-// Listar usuários
 app.get("/api/users", authMiddleware, (req, res) => {
   console.log("👥 Listando usuários");
   
@@ -252,7 +241,6 @@ app.get("/api/users", authMiddleware, (req, res) => {
   });
 });
 
-// Obter usuário por ID
 app.get("/api/users/:id", authMiddleware, (req, res) => {
   const userId = parseInt(req.params.id);
   const user = mockUsers.find(u => u.id === userId);
@@ -268,7 +256,6 @@ app.get("/api/users/:id", authMiddleware, (req, res) => {
   });
 });
 
-// Criar usuário
 app.post("/api/users", authMiddleware, (req, res) => {
   const { username, fullName, email, role, password } = req.body;
   
@@ -292,7 +279,6 @@ app.post("/api/users", authMiddleware, (req, res) => {
   });
 });
 
-// Atualizar usuário
 app.put("/api/users/:id", authMiddleware, (req, res) => {
   const userId = parseInt(req.params.id);
   const userIndex = mockUsers.findIndex(u => u.id === userId);
@@ -316,7 +302,6 @@ app.put("/api/users/:id", authMiddleware, (req, res) => {
   });
 });
 
-// Deletar usuário
 app.delete("/api/users/:id", authMiddleware, (req, res) => {
   const userId = parseInt(req.params.id);
   const userIndex = mockUsers.findIndex(u => u.id === userId);
@@ -336,13 +321,11 @@ app.delete("/api/users/:id", authMiddleware, (req, res) => {
 
 // ============== ROTAS DE ORDENS DE SERVIÇO ==============
 
-// Listar OS (com filtros)
 app.get("/api/os", authMiddleware, (req, res) => {
   console.log("📋 Listando OS");
   
   let filtered = [...mockOrders];
   
-  // Aplicar filtros
   if (req.query.status && req.query.status !== 'all') {
     filtered = filtered.filter(o => o.status === req.query.status);
   }
@@ -368,7 +351,6 @@ app.get("/api/os", authMiddleware, (req, res) => {
   });
 });
 
-// Histórico de OS (DEVE VIR ANTES DE /api/os/:id)
 app.get("/api/os/history", authMiddleware, (req, res) => {
   console.log("📜 Obtendo histórico");
   
@@ -376,7 +358,6 @@ app.get("/api/os/history", authMiddleware, (req, res) => {
     o.status === 'completed' || o.status === 'cancelled'
   );
   
-  // Aplicar filtros de data
   if (req.query.startDate) {
     filtered = filtered.filter(o => 
       new Date(o.createdAt) >= new Date(req.query.startDate)
@@ -394,7 +375,6 @@ app.get("/api/os/history", authMiddleware, (req, res) => {
   });
 });
 
-// Obter OS por ID (DEVE VIR DEPOIS DE /api/os/history)
 app.get("/api/os/:id", authMiddleware, (req, res) => {
   const osId = parseInt(req.params.id);
   const order = mockOrders.find(o => o.id === osId);
@@ -408,7 +388,6 @@ app.get("/api/os/:id", authMiddleware, (req, res) => {
   });
 });
 
-// Criar OS
 app.post("/api/os", authMiddleware, (req, res) => {
   const newOrder = {
     id: mockOrders.length + 1,
@@ -423,15 +402,15 @@ app.post("/api/os", authMiddleware, (req, res) => {
   
   console.log("✅ OS criada:", newOrder.id);
   
-  // Emitir evento via WebSocket
-  io.emit('os:created', newOrder);
+  // Emitir evento via WebSocket para TODOS os clientes
+  io.emit('os:created', { order: newOrder });
+  console.log("📡 Evento 'os:created' emitido para todos os clientes");
   
   res.json({
     order: newOrder
   });
 });
 
-// Atualizar OS
 app.put("/api/os/:id", authMiddleware, (req, res) => {
   const osId = parseInt(req.params.id);
   const orderIndex = mockOrders.findIndex(o => o.id === osId);
@@ -449,15 +428,15 @@ app.put("/api/os/:id", authMiddleware, (req, res) => {
   
   console.log("✏️ OS atualizada:", osId);
   
-  // Emitir evento via WebSocket
-  io.emit('os:updated', mockOrders[orderIndex]);
+  // Emitir evento via WebSocket para TODOS os clientes
+  io.emit('os:updated', { order: mockOrders[orderIndex] });
+  console.log("📡 Evento 'os:updated' emitido para todos os clientes");
   
   res.json({
     order: mockOrders[orderIndex]
   });
 });
 
-// Deletar OS
 app.delete("/api/os/:id", authMiddleware, (req, res) => {
   const osId = parseInt(req.params.id);
   const orderIndex = mockOrders.findIndex(o => o.id === osId);
@@ -470,15 +449,15 @@ app.delete("/api/os/:id", authMiddleware, (req, res) => {
   
   console.log("🗑️ OS deletada:", osId);
   
-  // Emitir evento via WebSocket
-  io.emit('os:deleted', osId);
+  // Emitir evento via WebSocket para TODOS os clientes
+  io.emit('os:deleted', { orderId: osId });
+  console.log("📡 Evento 'os:deleted' emitido para todos os clientes");
   
   res.json({
     message: "OS deletada com sucesso"
   });
 });
 
-// Adicionar comentário
 app.post("/api/os/:id/comments", authMiddleware, (req, res) => {
   const osId = parseInt(req.params.id);
   const order = mockOrders.find(o => o.id === osId);
@@ -500,11 +479,21 @@ app.post("/api/os/:id/comments", authMiddleware, (req, res) => {
   
   console.log("💬 Comentário adicionado à OS:", osId);
   
-  // Emitir evento via WebSocket
+  // Emitir evento via WebSocket para TODOS os clientes
   io.emit('os:comment', { osId, comment: newComment });
+  console.log("📡 Evento 'os:comment' emitido para todos os clientes");
   
   res.json({
     comment: newComment
+  });
+});
+
+// Rota para obter informações de rede (útil para debug)
+app.get("/api/network/info", (req, res) => {
+  res.json({
+    serverIp: LOCAL_IP,
+    port: PORT,
+    hostname: require('os').hostname()
   });
 });
 
@@ -513,19 +502,24 @@ app.get("/health", (req, res) => {
   res.json({ 
     status: "ok", 
     message: "Backend funcionando",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    ip: LOCAL_IP,
+    port: PORT
   });
 });
 
 // Rota raiz
 app.get("/", (req, res) => {
   res.json({ 
-    message: "OS Manager Backend API",
-    version: "1.0.0",
+    message: "OS Manager Backend API - Rede Local",
+    version: "2.0.0",
+    serverIp: LOCAL_IP,
+    port: PORT,
     endpoints: {
       health: "/health",
-      auth: "/api/auth/:action",      // Usando parâmetro nomeado
-      users: "/api/users/:id?",       // Parâmetro opcional
+      networkInfo: "/api/network/info",
+      auth: "/api/auth/:action",
+      users: "/api/users/:id?",
       os: "/api/os/:id?"   
     }
   });
@@ -534,20 +528,33 @@ app.get("/", (req, res) => {
 // ============== WEBSOCKET ==============
 
 io.on('connection', (socket) => {
-  console.log('🔌 Cliente conectado:', socket.id);
+  const clientIp = socket.handshake.address;
+  console.log('🔌 Cliente conectado:', socket.id, '- IP:', clientIp);
+  
+  // Enviar informações do servidor ao conectar
+  socket.emit('server:info', {
+    serverIp: LOCAL_IP,
+    port: PORT,
+    message: 'Conectado ao servidor OS Manager'
+  });
   
   socket.on('disconnect', () => {
-    console.log('❌ Cliente desconectado:', socket.id);
+    console.log('❌ Cliente desconectado:', socket.id, '- IP:', clientIp);
   });
   
   socket.on('os:subscribe', (osId) => {
     socket.join(`os:${osId}`);
-    console.log(`📡 Cliente inscrito na OS ${osId}`);
+    console.log(`📡 Cliente ${socket.id} inscrito na OS ${osId}`);
   });
   
   socket.on('os:unsubscribe', (osId) => {
     socket.leave(`os:${osId}`);
-    console.log(`📡 Cliente desinscrito da OS ${osId}`);
+    console.log(`📡 Cliente ${socket.id} desinscrito da OS ${osId}`);
+  });
+  
+  // Ping/Pong para manter conexão viva
+  socket.on('ping', () => {
+    socket.emit('pong');
   });
 });
 
@@ -555,27 +562,33 @@ io.on('connection', (socket) => {
 
 const PORT = parseInt(process.env.PORT) || 5000;
 
-// ============== INICIAR SERVIDOR ==============
-server.listen(PORT, '127.0.0.1', () => {
+// IMPORTANTE: Escutar em 0.0.0.0 para aceitar conexões de QUALQUER IP da rede
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔════════════════════════════════════════════════╗
-║     🚀 OS Manager Backend - RODANDO           ║
+║     🚀 OS Manager Backend - REDE LOCAL        ║
 ╠════════════════════════════════════════════════╣
-║  Servidor: http://localhost:${PORT.toString().padEnd(23)}║
-║  WebSocket: ws://localhost:${PORT.toString().padEnd(22)}║
+║  Servidor Local: http://localhost:${PORT.toString().padEnd(18)}║
+║  IP da Rede:     http://${LOCAL_IP}:${PORT.toString().padEnd(18)}║
+║  WebSocket:      ws://${LOCAL_IP}:${PORT.toString().padEnd(22)}║
+╠════════════════════════════════════════════════╣
+║  ✅ Aceitando conexões de toda a rede local   ║
+║  🔌 Sincronização em tempo real ativada       ║
 ╚════════════════════════════════════════════════╝
   `);
+  
+  console.log('\n📱 Para conectar outros dispositivos:');
+  console.log(`   1. Use o IP: ${LOCAL_IP}`);
+  console.log(`   2. Porta: ${PORT}`);
+  console.log(`   3. URL completa: http://${LOCAL_IP}:${PORT}\n`);
 });
 
 // ============== MIDDLEWARE CATCH-ALL PARA SPA ==============
-// DEVE SER A ÚLTIMA COISA ANTES DE INICIAR O SERVIDOR
 app.use((req, res, next) => {
-  // Não interceptar rotas de API ou socket.io
   if (req.path.startsWith('/api') || req.path.startsWith('/socket.io') || req.path === '/health') {
     return next();
   }
   
-  // Servir index.html para todas as outras rotas (SPA routing)
   const frontendPath = process.env.FRONTEND_PATH || path.join(__dirname, '../../frontend/dist');
   res.sendFile(path.join(frontendPath, 'index.html'), (err) => {
     if (err) {
